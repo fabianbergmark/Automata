@@ -7,6 +7,8 @@ import Control.Comonad
 import Data.Default
 
 class Universe a b where
+  get        :: a b -> b
+  set        :: b -> a b ->  a b
   left       :: a b -> a b
   right      :: a b -> a b
   up         :: a b -> a b

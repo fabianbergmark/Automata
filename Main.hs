@@ -1,58 +1,200 @@
-{-# LANGUAGE FlexibleContexts #-}
+{-# LANGUAGE ExistentialQuantification,
+             FlexibleContexts,
+             RecordWildCards #-}
 
 module Main where
 
 import Control.Comonad
 import Control.Monad (forM, forM_, void)
 
+import Data.Time
+
 import Graphics.UI.WX hiding (Event, space)
+
+import System.Exit
 
 import Conway
 import ListZipper
 import Plane
 import Torus
-import Universe
+import Universe (Universe, Matrix(..))
+import qualified Universe
 
-paintGrid :: Matrix a Bool => Var (a Bool) -> DC b -> Rect -> IO ()
-paintGrid var dc area = do
-  universe <- varGet var
-  let grid = toMatrix universe
-      areaHeight = rectHeight area
-      areaWidth = rectWidth area
-      height = areaHeight `quot` length grid
-      width = areaWidth `quot` (head . fmap length $ grid)
-  pVar <- varCreate (Rect 0 0 width height)
-  forM_ grid $ \row -> do
-    forM_ row $ \state -> do
-      pos <- varGet pVar
-      let c = if state then white else black
-      drawRect dc pos [bgcolor := c]
-      varUpdate pVar (\p -> p { rectLeft = rectLeft p + width })
-    varUpdate pVar (\p -> p { rectTop = rectTop p + height, rectLeft = 0 })
+data Creation = forall a. (Comonad a, Matrix a Bool, Universe a Bool) =>
+                Creation (a Bool)
 
-evolveUniverse :: (Comonad a, Matrix a Bool, Universe a Bool) =>
-                  Var (a Bool) -> Panel () -> IO ()
-evolveUniverse var p = do
-  varUpdate var evolve
-  repaint p
+evolve' (Creation u) = Creation (evolve u)
+up' (Creation u) = Creation (Universe.up u)
+down' (Creation u) = Creation (Universe.down u)
+left' (Creation u) = Creation (Universe.left u)
+right' (Creation u) = Creation (Universe.right u)
+
+god :: Int -> Int -> (Creation -> Creation) -> Creation -> Creation
+god 0 0 backtrack (Creation u) =
+  backtrack $
+  if Universe.get u
+  then
+    Creation $ Universe.set False u
+  else
+    Creation $ Universe.set True u
+god 0 y b c = god 0 (y-1) (b . up') (down' c)
+god x y b c = god (x-1) y (b . left') (right' c)
+
+maxXDim = 200
+maxYDim = 200
+minXDim = 3
+minYDim = 3
+
+data State =
+  State
+  { stateUniverse  :: Creation
+  , stateFrame     :: Frame ()
+  , statePanel     :: Panel ()
+  , stateTimer     :: Timer
+  , stateRunning   :: Bool
+  , stateSpeed     :: Int
+  , stateXDim      :: Int
+  , stateYDim      :: Int
+  , stateLastFrame :: UTCTime }
 
 main = do
-  let grid = (glider <| space 3 3 <| glider <| space 3 3 <| space 3 3) -^-
-             space 15 1 -^-
-             (space 3 3 <| glider <| space 3 3 <| glider <| space 3 3) -^-
-             space 15 1 -^-
-             (glider <| space 3 3 <| glider <| space 3 3 <| space 3 3) -^-
-             space 15 1 -^-
-             (space 3 3 <| glider <| space 3 3 <| glider <| space 3 3) -^-
-             space 15 1
-
-      universe = gliderGun <| space 10 11 -^- space 48 40
+  let universe = space 300 300 :: Torus Bool
 
   start $ do
-    var <- varCreate universe
     f  <- frame [ text := "Game of life"
                 , outerSize := Size 500 500
-                , resizeable := False ]
-    p <- panel f [ on paint := paintGrid var ]
-    t <- timer f [ interval := 100, on command := evolveUniverse var p ]
-    return ()
+                , closeable := True
+                , on closing := exitSuccess ]
+    p <- panel f [ bgcolor := black ]
+
+    t <- timer f [ interval := 100 ]
+
+    s <- getCurrentTime
+
+    var <- varCreate $ State (Creation universe) f p t True 100 50 50 s
+
+    set t [ on command  := evolveUniverse var ]
+    set p [ on paint    := paintGrid var
+          , on mouse    := clickGrid var
+          , on keyboard := keyboardGrid var ]
+
+paintGrid :: Var State -> DC b -> Rect -> IO ()
+paintGrid var dc area = do
+  State {..} <- varGet var
+  now <- getCurrentTime
+  let diff = diffUTCTime now stateLastFrame
+  varUpdate var (\s -> s { stateLastFrame = now })
+  drawText dc (show diff) (Point 0 0) [ textColor := white ]
+  Creation universe <- return stateUniverse
+  let grid = toMatrix universe
+      xDim = min stateXDim (head . fmap length $ grid)
+      yDim = min stateYDim (length grid)
+      height = rectHeight area `quot` yDim
+      width = rectWidth area `quot` xDim
+  pVar <- varCreate (Rect 0 0 width height)
+  forM_ (take yDim grid) $ \row -> do
+    forM_ (take xDim row) $ \state -> do
+      pos <- varGet pVar
+      when state $ do
+        drawRect dc pos [ bgcolor := white ]
+      varUpdate pVar (\p -> p { rectLeft = rectLeft p + width })
+    varUpdate pVar (\p -> p { rectTop = rectTop p + height,
+                              rectLeft = 0 })
+
+keyboardGrid :: Var State -> EventKey -> IO ()
+keyboardGrid var (EventKey key Modifiers {..} _) = do
+  case key of
+    KeySpace -> do
+      State {..} <- varGet var
+      if stateRunning
+        then do
+        set stateTimer [ enabled := False ]
+        varUpdate var (\s@(State {..}) -> s { stateRunning = False })
+        return ()
+        else do
+        set stateTimer [ enabled := True ]
+        varUpdate var (\s@(State {..}) -> s { stateRunning = True })
+        return ()
+    KeyUp -> do
+      varUpdate var (\s@(State {..}) -> s { stateUniverse = down' stateUniverse })
+      State {..} <- varGet var
+      repaint statePanel
+      return ()
+    KeyDown -> do
+      varUpdate var (\s@(State {..}) -> s { stateUniverse = up' stateUniverse })
+      State {..} <- varGet var
+      repaint statePanel
+      return ()
+    KeyLeft -> do
+      varUpdate var (\s@(State {..}) -> s { stateUniverse = right' stateUniverse })
+      State {..} <- varGet var
+      repaint statePanel
+      return ()
+    KeyRight -> do
+      varUpdate var (\s@(State {..}) -> s { stateUniverse = left' stateUniverse })
+      State {..} <- varGet var
+      repaint statePanel
+      return ()
+    KeyChar 'z' -> do
+      State {..} <- varGet var
+      if altDown
+        then do
+        let newXDim = min maxXDim $ stateXDim + 2
+            newYDim = min maxYDim $ stateYDim + 2
+        when (newXDim /= stateXDim && newYDim /= stateYDim) $ do
+          varUpdate var (\s@(State {..}) ->
+                          s { stateUniverse = up' . left' $ stateUniverse
+                            , stateXDim = newXDim
+                            , stateYDim = newYDim })
+          repaint statePanel
+          return ()
+        else do
+        let newXDim = max minXDim $ stateXDim - 2
+            newYDim = max minYDim $ stateYDim - 2
+        when (newXDim /= stateXDim && newYDim /= stateYDim) $ do
+          varUpdate var (\s@(State {..}) ->
+                          s { stateUniverse = down' . right' $ stateUniverse
+                            , stateXDim = newXDim
+                            , stateYDim = newYDim })
+          repaint statePanel
+          return ()
+    KeyChar '+' -> do
+      State {..} <- varGet var
+      let newSpeed = max 10 $ stateSpeed - 10
+      set stateTimer [ interval := newSpeed ]
+      varUpdate var (\s@(State {..}) -> s { stateSpeed = newSpeed })
+      return ()
+    KeyChar '-' -> do
+      State {..} <- varGet var
+      let newSpeed = stateSpeed + 10
+      set stateTimer [ interval := newSpeed ]
+      varUpdate var (\s@(State {..}) -> s { stateSpeed = newSpeed })
+      return ()
+    _ -> return ()
+
+clickGrid :: Var State -> EventMouse -> IO ()
+clickGrid var event = do
+  case event of
+    MouseLeftDown Point {..} _ -> do
+      State {..} <- varGet var
+      Creation universe <- return stateUniverse
+      area <- get statePanel outerSize
+      let grid = toMatrix universe
+          xDim = min stateXDim (head . fmap length $ grid)
+          yDim = min stateYDim (length grid)
+          height = sizeH area `quot` yDim
+          width = sizeW area `quot` xDim
+          x = pointX `quot` width
+          y = pointY `quot` height
+      varUpdate var (\s@(State {..}) ->
+                      s { stateUniverse = god x y id stateUniverse })
+      repaint statePanel
+      return ()
+    _ -> return ()
+
+evolveUniverse :: Var State -> IO ()
+evolveUniverse var = do
+  State {..} <- varGet var
+  varUpdate var (\s@(State {..}) ->
+                  s { stateUniverse = evolve' stateUniverse })
+  repaint statePanel
