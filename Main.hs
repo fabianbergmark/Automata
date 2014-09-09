@@ -40,14 +40,23 @@ god 0 0 backtrack (Creation u) =
 god 0 y b c = god 0 (y-1) (b . up') (down' c)
 god x y b c = god (x-1) y (b . left') (right' c)
 
+ankh :: Int -> Int -> (Creation -> Creation) -> Creation -> Creation
+ankh 0 0 backtrack (Creation u) =
+  backtrack $ Creation $ Universe.set True u
+
+ankh 0 y b c = ankh 0 (y-1) (b . up') (down' c)
+ankh x y b c = ankh (x-1) y (b . left') (right' c)
+
 maxXDim = 200
 maxYDim = 200
 minXDim = 3
 minYDim = 3
+maxSpeed = 2
 
 data State =
   State
   { stateUniverse  :: Creation
+  , stateBigBang   :: Creation
   , stateFrame     :: Frame ()
   , statePanel     :: Panel ()
   , stateTimer     :: Timer
@@ -71,7 +80,11 @@ main = do
 
     s <- getCurrentTime
 
-    var <- varCreate $ State (Creation universe) f p t True 100 50 50 s
+    var <- varCreate $
+           State
+           (Creation universe)
+           (Creation universe)
+           f p t True 100 50 50 s
 
     set t [ on command  := evolveUniverse var ]
     set p [ on paint    := paintGrid var
@@ -92,8 +105,9 @@ paintGrid var dc area = do
       height = rectHeight area `quot` yDim
       width = rectWidth area `quot` xDim
   pVar <- varCreate (Rect 0 0 width height)
-  forM_ (take yDim grid) $ \row -> do
-    forM_ (take xDim row) $ \state -> do
+  forM_ (take yDim . iterate Universe.down $ universe) $ \universe' -> do
+    forM_ (take xDim . iterate Universe.right $ universe') $ \universe'' -> do
+      let state = extract universe''
       pos <- varGet pVar
       when state $ do
         drawRect dc pos [ bgcolor := white ]
@@ -160,7 +174,7 @@ keyboardGrid var (EventKey key Modifiers {..} _) = do
           return ()
     KeyChar '+' -> do
       State {..} <- varGet var
-      let newSpeed = max 10 $ stateSpeed - 10
+      let newSpeed = max maxSpeed $ stateSpeed - 10
       set stateTimer [ interval := newSpeed ]
       varUpdate var (\s@(State {..}) -> s { stateSpeed = newSpeed })
       return ()
@@ -170,6 +184,10 @@ keyboardGrid var (EventKey key Modifiers {..} _) = do
       set stateTimer [ interval := newSpeed ]
       varUpdate var (\s@(State {..}) -> s { stateSpeed = newSpeed })
       return ()
+    KeyChar 'c' -> do
+      State {..} <- varGet var
+      varUpdate var (\s@(State {..}) -> s { stateUniverse = stateBigBang })
+      repaint statePanel
     _ -> return ()
 
 clickGrid :: Var State -> EventMouse -> IO ()
@@ -184,12 +202,25 @@ clickGrid var event = do
           yDim = min stateYDim (length grid)
           height = sizeH area `quot` yDim
           width = sizeW area `quot` xDim
-          x = pointX `quot` width
-          y = pointY `quot` height
+          x = max 0 $ pointX `quot` width
+          y = max 0 $ pointY `quot` height
       varUpdate var (\s@(State {..}) ->
                       s { stateUniverse = god x y id stateUniverse })
       repaint statePanel
-      return ()
+    MouseLeftDrag Point {..} _ -> do
+      State {..} <- varGet var
+      Creation universe <- return stateUniverse
+      area <- get statePanel outerSize
+      let grid = toMatrix universe
+          xDim = min stateXDim (head . fmap length $ grid)
+          yDim = min stateYDim (length grid)
+          height = sizeH area `quot` yDim
+          width = sizeW area `quot` xDim
+          x = max 0 $ pointX `quot` width
+          y = max 0 $ pointY `quot` height
+      varUpdate var (\s@(State {..}) ->
+                      s { stateUniverse = ankh x y id stateUniverse })
+      repaint statePanel
     _ -> return ()
 
 evolveUniverse :: Var State -> IO ()
