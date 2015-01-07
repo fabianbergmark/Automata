@@ -67,7 +67,7 @@ data State =
   , stateLastFrame :: UTCTime }
 
 main = do
-  let universe = space 300 300 :: Torus Bool
+  let universe = space 100 100 :: Torus Bool
 
   start $ do
     f  <- frame [ text := "Game of life"
@@ -99,9 +99,8 @@ paintGrid var dc area = do
   varUpdate var (\s -> s { stateLastFrame = now })
   drawText dc (show diff) (Point 0 0) [ textColor := white ]
   Creation universe <- return stateUniverse
-  let grid = toMatrix universe
-      xDim = min stateXDim (head . fmap length $ grid)
-      yDim = min stateYDim (length grid)
+  let xDim = stateXDim
+      yDim = stateYDim
       height = rectHeight area `quot` yDim
       width = rectWidth area `quot` xDim
   pVar <- varCreate (Rect 0 0 width height)

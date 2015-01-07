@@ -46,7 +46,7 @@ instance (Default a) => Default (Loop a) where
   def = mempty
 
 instance Functor Loop where
-  fmap f (Loop !s !r) = Loop (f s) (fmap f r)
+  fmap f (Loop s r) = Loop (f s) (fmap f r)
 
 instance Comonad Loop where
   extract = loopRead

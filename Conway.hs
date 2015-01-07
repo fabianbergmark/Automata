@@ -6,6 +6,7 @@ import Control.Comonad
 import Control.Monad
 
 import Data.Default
+import Data.Foldable (foldr')
 
 import ListZipper
 import Plane
@@ -19,11 +20,9 @@ neighbours = [left, right, up, down,
               upleft, upright, downleft, downright]
 
 aliveNeighbours :: (Universe a Bool, Comonad a) => a Bool -> Int
-aliveNeighbours z =
-  card $ map (\dir -> extract . dir $ z) neighbours
-
-card :: [Bool] -> Int
-card = length . filter id
+aliveNeighbours z = foldr' count 0 neighbours
+  where
+    count d c = if extract . d $ z then c + 1 else c
 
 conway :: (Universe a Bool, Comonad a) => a Bool -> Bool
 conway z =
